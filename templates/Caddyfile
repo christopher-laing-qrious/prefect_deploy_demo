@@ -1,0 +1,21 @@
+{{ domain }} {
+    encode gzip
+
+    header {
+        Cache-Control "no-store"
+        Pragma "no-cache"
+        WWW-Authenticate "Basic realm=\"Prefect Dashboard\", charset=\"UTF-8\""
+    }
+
+    log {
+        output stdout
+        format console
+        level DEBUG
+    }
+
+    basicauth /* {
+        prefect-admin {{ prefect_admin_basicauth_password }}
+    }
+
+    reverse_proxy prefect-server:4200
+}

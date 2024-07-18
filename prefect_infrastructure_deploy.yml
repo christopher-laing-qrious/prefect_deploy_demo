@@ -1,0 +1,107 @@
+---
+- name: Deploy Prefect Infrastructure
+  hosts: prefect_server
+  become: yes
+  vars:
+    deploy_dir: /root/prefect-test
+    prefect_data_dir: /root/prefect-test/prefect_data
+    work_pool_name: "default-agent-pool"
+    flow_file: "commodity_prices_flow.py"
+    deployment_file: "commodity_prices_deployment.yaml"
+
+  tasks:
+    - name: Ensure deploy directory exists
+      file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy Prefect files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ deploy_dir }}/{{ item | basename }}"
+        mode: '0644'
+      with_fileglob:
+        - "{{ playbook_dir }}/files/*"
+
+
+    - name: Deploy all files from templates directory
+      template:
+        src: "{{ item }}"
+        dest: "{{ deploy_dir }}/{{ item | basename }}"
+        mode: '0644'
+      with_fileglob:
+        - "templates/*"
+
+    - name: Ensure prefect_data directory exists
+      file:
+        path: "{{ deploy_dir }}/prefect_data"
+        state: directory
+        mode: '0755'
+
+    - name: Ensure sqlite_data directory exists
+      file:
+        path: "{{ deploy_dir }}/sqlite_data"
+        state: directory
+        mode: '0755'
+
+    - name: Copy prefect_data contents
+      copy:
+        src: "files/prefect_data/"
+        dest: "{{ deploy_dir }}/prefect_data/"
+        mode: '0644'
+
+    - name: Copy prefect.yaml to prefect_data directory
+      copy:
+        src: "files/prefect.yaml"
+        dest: "{{ deploy_dir }}/prefect_data/prefect.yaml"
+        mode: '0644'
+
+    - name: Start Docker services
+      community.docker.docker_compose:
+        project_src: "{{ deploy_dir }}"
+        state: present
+      register: output
+
+    - name: Wait for Prefect server to be ready
+      command: docker-compose exec -T prefect-server python -c "import requests; requests.get('http://localhost:4200/api/health').raise_for_status()"
+      args:
+        chdir: "{{ deploy_dir }}"
+      register: result
+      until: result.rc == 0
+      retries: 30
+      delay: 10
+
+    - name: Ensure default work pool exists
+      block:
+        - name: Attempt to create default work pool
+          command: docker-compose exec -T prefect-server prefect work-pool create "{{ work_pool_name }}" --type process
+          args:
+            chdir: "{{ deploy_dir }}"
+          register: create_pool_result
+      rescue:
+        - name: Check if work pool already exists
+          command: docker-compose exec -T prefect-server prefect work-pool ls
+          args:
+            chdir: "{{ deploy_dir }}"
+          register: work_pool_list
+
+        - name: Set fact for work pool existence
+          set_fact:
+            work_pool_exists: "{{ work_pool_list.stdout_lines | select('search', work_pool_name[:14]) | list | length > 0 }}"
+
+        - name: Display work pool existence status
+          debug:
+            var: work_pool_exists
+
+      always:
+        - name: Confirm work pool status
+          debug:
+            msg: "Work pool '{{ work_pool_name }}' is ready"
+          when: create_pool_result is success or work_pool_exists | default(false)
+
+        - name: Fail if work pool status is uncertain
+          fail:
+            msg: "Unable to confirm if work pool '{{ work_pool_name }}' exists or was created successfully"
+          when: create_pool_result is failed and not work_pool_exists | default(false)
+

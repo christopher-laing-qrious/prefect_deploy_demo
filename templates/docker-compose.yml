@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: prefectpass
+      POSTGRES_DB: prefect
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "prefect"]
+      interval: 5s
+      retries: 5
+    networks:
+      - prefect-network
+
+  prefect-server:
+    image: prefecthq/prefect:2-latest
+    container_name: prefect-server
+    command: prefect server start
+    environment:
+      - PREFECT_SERVER_API_HOST=0.0.0.0
+      - PREFECT_SERVER_API_PORT=4200
+      - PREFECT_API_KEY=${PREFECT_API_KEY}
+      - PREFECT_SERVER_DATABASE_CONNECTION_URL=postgresql+asyncpg://prefect:prefectpass@postgres:5432/prefect
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./prefect_data:/opt/prefect/flows
+      - ./prefect.yaml:/opt/prefect/prefect.yaml
+    networks:
+      - prefect-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:4200/api/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prefect-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prefect-worker
+    command: prefect worker start -p default-agent-pool -t process
+    environment:
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - PREFECT_API_KEY={{ prefect_api_key }}
+    env_file:
+      - .env
+    volumes:
+      - ./prefect_data:/opt/prefect/flows
+      - ./sqlite_data:/opt/prefect/data
+      - ./prefect.yaml:/opt/prefect/prefect.yaml
+    networks:
+      - prefect-network
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-{{ domain }}}
+    networks:
+      - prefect-network
+
+volumes:
+  postgres-data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  prefect-network:
+    driver: bridge

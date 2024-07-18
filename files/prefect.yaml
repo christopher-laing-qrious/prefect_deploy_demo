@@ -1,0 +1,3 @@
+server:
+  database:
+    connection_url: "${PREFECT_SERVER_DATABASE_CONNECTION_URL}"

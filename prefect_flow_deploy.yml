@@ -1,0 +1,85 @@
+---
+- name: Deploy Prefect Flow
+  hosts: prefect_server
+  become: yes
+  vars:
+    deploy_dir: "~/prefect-test"
+    flow_file: commodity_prices_flow.py
+    flow_function: commodity_prices_to_sqlite  # This should match your Python function name
+    deployment_name: commodity-prices-deployment
+    queue_name: default
+    work_pool_name: "default-agent-pool"  # Define the work_pool_name here
+    deployment_file: "commodity_prices_deployment.yaml"
+    prefect_data_dir: /root/prefect-test/prefect_data
+
+
+
+  tasks:
+    - name: Ensure deploy directory exists
+      file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Ensure prefect_data directory exists
+      file:
+        path: "{{ deploy_dir }}/prefect_data"
+        state: directory
+        mode: '0755'
+
+    - name: Copy updated flow file
+      copy:
+        src: "files/prefect_data/{{ flow_file }}"
+        dest: "{{ deploy_dir }}/prefect_data/{{ flow_file }}"
+        mode: '0644'
+
+    - name: Copy deployment YAML to prefect_data directory
+      copy:
+        src: "files/prefect_data/{{ deployment_file }}"
+        dest: "{{ prefect_data_dir }}/{{ deployment_file }}"
+        mode: '0644'
+
+    - name: Debug - List contents of prefect_data directory
+      command: ls -la {{ deploy_dir }}/prefect_data
+      register: prefect_data_contents
+
+    - name: Debug - Print prefect_data contents
+      debug:
+        var: prefect_data_contents.stdout_lines
+
+    - name: Verify flow file exists in prefect-server container
+      command: docker-compose exec -T prefect-server test -f "/opt/prefect/flows/{{ flow_file }}"
+      args:
+        chdir: "{{ deploy_dir }}"
+
+    # - name: Register Prefect deployment
+    #   command: >
+    #     docker-compose exec -T prefect-server
+    #     prefect deploy --from-yaml "/opt/prefect/flows/{{ deployment_file }}" --pool "{{ work_pool_name }}"
+    #   args:
+    #     chdir: "{{ deploy_dir }}"
+    #   register: deploy_result
+    #   retries: 3
+    #   delay: 10
+    #   until: deploy_result.rc == 0
+
+    - name: Deploy Prefect flow
+      command: >
+        docker-compose exec -T prefect-server prefect deploy
+        "/opt/prefect/flows/{{ flow_file }}:commodity_prices_to_sqlite"
+        --name "commodity-prices-deployment"
+        --pool "{{ work_pool_name }}"
+      args:
+        chdir: "{{ deploy_dir }}"
+      register: deploy_result
+      retries: 3
+      delay: 10
+      until: deploy_result.rc == 0
+
+
+    - name: Start a flow run (optional)
+      command: >
+        docker-compose exec -T prefect-server
+        prefect deployment run "commodity-prices-to-sqlite/{{ deployment_name }}"
+      args:
+        chdir: "{{ deploy_dir }}"

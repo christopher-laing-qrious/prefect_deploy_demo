@@ -1,0 +1,5 @@
+name: commodity-prices-to-sqlite
+entrypoint: /opt/prefect/flows/commodity_prices_flow.py:commodity_prices_to_sqlite
+work_queue_name: default
+schedule:
+  cron: "0 0 * * *"  # Run daily at midnight
